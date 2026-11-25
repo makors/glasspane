@@ -1,0 +1,11 @@
+# Generated VM images and installation media (large and not redistributable)
+/iso/
+/images/
+/state/
+/build/
+*.log
+
+# Runtime/editor noise
+__pycache__/
+.DS_Store
+node_modules/

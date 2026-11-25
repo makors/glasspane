@@ -1,0 +1,721 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0d0d0e">
+  <title>Glasspane — Windows 10 in the browser</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230d0d0e'/%3E%3Crect x='7.5' y='9.5' width='17' height='13' rx='2.5' fill='none' stroke='%23ececea' stroke-width='2'/%3E%3C/svg%3E">
+  <link rel="preload" href="assets/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <style>
+    @font-face {
+      font-family: "Inter";
+      src: url("assets/fonts/inter-latin.woff2") format("woff2");
+      font-weight: 400 600;
+      font-style: normal;
+      font-display: swap;
+    }
+
+    :root {
+      color-scheme: dark;
+
+      --bg: #0d0d0e;
+      --pane: #000;
+      --fg: #ececea;
+      --fg-2: rgba(236, 236, 234, .6);
+      --fg-3: rgba(236, 236, 234, .4);
+      --hair: rgba(255, 255, 255, .08);
+      --hover: rgba(255, 255, 255, .07);
+      --press: rgba(255, 255, 255, .11);
+      --ok: #6fcf97;
+      --danger: #f08a80;
+      --focus: rgba(236, 236, 234, .8);
+
+      --radius: 8px;
+      --ease: cubic-bezier(.2, .7, .2, 1);
+
+      /* Layout: one pane, one line of chrome beneath it. */
+      --pad: clamp(8px, 2.4vmin, 28px);
+      --bar: 44px;
+      --avail-w: calc(100vw - 2 * var(--pad));
+      --avail-h: calc(100vh - 2 * var(--pad) - var(--bar));
+      --pane-w: min(1024px, var(--avail-w), calc(var(--avail-h) * 4 / 3));
+    }
+    @supports (height: 100dvh) {
+      :root { --avail-h: calc(100dvh - 2 * var(--pad) - var(--bar)); }
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--fg);
+      font: 400 13px/1.5 "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", "Noto Sans", Arial, sans-serif;
+      font-feature-settings: "calt", "case";
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      text-rendering: optimizeLegibility;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    button {
+      appearance: none;
+      margin: 0;
+      border: 0;
+      background: none;
+      color: inherit;
+      font: inherit;
+      cursor: pointer;
+    }
+    button:disabled { cursor: default; }
+    :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+    /* ── Frame ─────────────────────────────────────────────── */
+
+    #app {
+      position: fixed;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      padding: var(--pad);
+    }
+    #frame {
+      display: inline-flex;
+      flex-direction: column;
+      max-width: 100%;
+    }
+
+    /* ── The pane ──────────────────────────────────────────── */
+
+    #stage {
+      position: relative;
+      display: grid;
+      place-items: center;
+      min-width: var(--pane-w);
+      min-height: calc(var(--pane-w) * 3 / 4);
+      overflow: hidden;
+      border-radius: var(--radius);
+      background: var(--pane);
+      box-shadow: 0 0 0 1px var(--hair), 0 30px 70px -30px rgba(0, 0, 0, .8);
+    }
+
+    #screen_container {
+      position: absolute;
+      inset: 0;
+      visibility: hidden;
+      overflow: hidden;
+      outline: none;
+      /* A small ring marks the host pointer until the mouse is captured. */
+      cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16'%3E%3Ccircle cx='8' cy='8' r='3.25' fill='none' stroke='%23000' stroke-opacity='.5' stroke-width='2.75'/%3E%3Ccircle cx='8' cy='8' r='3.25' fill='none' stroke='%23fff' stroke-width='1.25'/%3E%3C/svg%3E") 8 8, crosshair;
+    }
+    body.running #screen_container {
+      position: relative;
+      inset: auto;
+      visibility: visible;
+      animation: appear .5s var(--ease) both;
+    }
+    #screen_container canvas {
+      display: block;
+      max-width: var(--avail-w);
+      max-height: var(--avail-h);
+      object-fit: contain;
+    }
+    #screen_container > div {
+      max-width: var(--avail-w);
+      max-height: var(--avail-h);
+      overflow: hidden;
+      padding: 10px;
+      white-space: pre;
+      color: #ddd;
+      font: 14px/14px ui-monospace, SFMono-Regular, Menlo, Consolas, "DejaVu Sans Mono", monospace;
+    }
+
+    #screen_container:fullscreen {
+      position: static;
+      display: grid;
+      place-items: center;
+      width: 100vw;
+      height: 100vh;
+      background: #000;
+      animation: none;
+    }
+    #screen_container:fullscreen canvas {
+      width: 100% !important;
+      height: 100% !important;
+      max-width: none;
+      max-height: none;
+    }
+    #screen_container:fullscreen > div { max-width: 100vw; max-height: 100vh; }
+
+    /* ── Off state ─────────────────────────────────────────── */
+
+    #overlay {
+      position: absolute;
+      z-index: 2;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background: var(--pane);
+      transition: opacity .4s var(--ease), visibility 0s;
+    }
+    #overlay.hidden {
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transition: opacity .4s var(--ease), visibility 0s .4s;
+    }
+    #intro {
+      text-align: center;
+      animation: rise .7s var(--ease) both;
+    }
+    #intro h1 {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.25;
+      font-weight: 550;
+      letter-spacing: -.018em;
+    }
+    #intro .description {
+      margin: 6px 0 0;
+      color: var(--fg-2);
+      font-size: 13px;
+    }
+
+    #start {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      height: 36px;
+      margin-top: 28px;
+      padding: 0 18px;
+      border-radius: 999px;
+      background: var(--fg);
+      color: #0d0d0e;
+      font-size: 13px;
+      font-weight: 550;
+      letter-spacing: -.005em;
+      transition: background-color .2s, color .2s, box-shadow .2s, transform .12s var(--ease);
+    }
+    #start:hover:not(:disabled) { background: #fff; }
+    #start:active:not(:disabled) { transform: scale(.975); }
+    #start:disabled {
+      background: transparent;
+      color: var(--fg-2);
+      box-shadow: inset 0 0 0 1px var(--hair);
+    }
+    #start .spinner {
+      display: none;
+      width: 12px;
+      height: 12px;
+      border: 1.5px solid rgba(236, 236, 234, .22);
+      border-top-color: var(--fg);
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+    }
+    body.loading #start .spinner,
+    #overlay.hidden #start:disabled .spinner { display: block; }
+
+    /* Download progress: a hairline along the bottom edge of the pane. */
+    #progress {
+      position: absolute;
+      z-index: 3;
+      inset: auto 0 0;
+      height: 2px;
+      background: rgba(255, 255, 255, .06);
+      opacity: 0;
+      transition: opacity .3s;
+    }
+    #progress > div {
+      width: 0%;
+      height: 100%;
+      background: var(--fg);
+      transition: width .25s linear;
+    }
+    body.loading #progress { opacity: 1; }
+
+    /* ── Status line ───────────────────────────────────────── */
+
+    #topbar {
+      position: relative;
+      z-index: 4;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      width: 0;            /* never widen the frame beyond the pane */
+      min-width: 100%;
+      height: var(--bar);
+      padding: 0 2px 0 4px;
+      color: var(--fg-2);
+      font-size: 12.5px;
+      user-select: none;
+    }
+    #brand {
+      flex: none;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      color: var(--fg);
+      font-weight: 500;
+      letter-spacing: -.005em;
+    }
+    #brand::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: rgba(236, 236, 234, .26);
+      transition: background-color .3s;
+    }
+    body.loading #brand::before { background: var(--fg); animation: pulse 1.4s ease-in-out infinite; }
+    body.running #brand::before { background: var(--ok); }
+    body.error #brand::before { background: var(--danger); animation: none; }
+
+    #status, #hint {
+      min-width: 0;
+      margin: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    #status:empty { display: none; }
+    #status.error { color: var(--danger); }
+
+    /* The hint takes the status slot while the machine runs and has nothing to say. */
+    #hint { display: none; color: var(--fg-3); }
+    body.running #status:empty + #hint { display: block; animation: recede 1s 14s both; }
+    body.running #topbar:hover #hint,
+    body.running.captured #hint { animation: none; }
+    #hint .captured, body.captured #hint .free { display: none; }
+    body.captured #hint .captured { display: inline; }
+    .kbd {
+      display: inline-block;
+      margin: 0 1px;
+      padding: 0 4px;
+      border-radius: 4px;
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .14);
+      color: var(--fg-2);
+      font-size: 11px;
+      line-height: 16px;
+    }
+
+    #stats {
+      flex: none;
+      margin-left: auto;
+      color: var(--fg-3);
+      font-variant-numeric: tabular-nums;
+    }
+    #stats:empty { display: none; }
+
+    #controls {
+      flex: none;
+      display: none;
+      align-items: center;
+      gap: 2px;
+    }
+    body.running #controls { display: flex; animation: appear .4s var(--ease) both; }
+    #controls button {
+      position: relative;
+      display: grid;
+      place-items: center;
+      width: 30px;
+      height: 30px;
+      border-radius: 7px;
+      color: var(--fg-3);
+      transition: color .15s, background-color .15s;
+    }
+    #controls button:hover { color: var(--fg); background: var(--hover); }
+    #controls button:active { background: var(--press); }
+    #controls button[aria-pressed="true"] { color: var(--fg); }
+    #controls button:disabled { color: rgba(236, 236, 234, .18); background: none; }
+    #controls svg {
+      width: 16px;
+      height: 16px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.4;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    #controls button::after {
+      content: attr(data-tip);
+      position: absolute;
+      bottom: calc(100% + 8px);
+      left: 50%;
+      padding: 4px 8px;
+      border-radius: 6px;
+      background: #1b1b1d;
+      box-shadow: 0 0 0 1px var(--hair), 0 8px 24px rgba(0, 0, 0, .5);
+      color: var(--fg);
+      font-size: 11.5px;
+      line-height: 16px;
+      white-space: nowrap;
+      opacity: 0;
+      transform: translate(-50%, 3px);
+      pointer-events: none;
+      transition: opacity .14s, transform .14s var(--ease);
+    }
+    #controls button:last-child::after { left: auto; right: 0; transform: translate(0, 3px); }
+    #controls button:hover::after,
+    #controls button:focus-visible::after { opacity: 1; transform: translate(-50%, 0); }
+    #controls button:last-child:hover::after,
+    #controls button:last-child:focus-visible::after { transform: translate(0, 0); }
+    #controls button:hover::after { transition-delay: .4s; }
+
+    /* ── Motion ────────────────────────────────────────────── */
+
+    @keyframes appear { from { opacity: 0; } }
+    @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+    @keyframes recede { to { opacity: 0; } }
+    @keyframes spin { to { transform: rotate(1turn); } }
+    @keyframes pulse { 50% { opacity: .3; } }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: .01ms !important;
+        animation-delay: 0s !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .01ms !important;
+      }
+      body.running #status:empty + #hint { animation: none; }
+      #start .spinner { animation-duration: 1.6s !important; animation-iteration-count: infinite !important; }
+    }
+
+    /* ── Small screens ─────────────────────────────────────── */
+
+    @media (max-width: 640px) {
+      :root { --radius: 6px; }
+      #hint, #stats { display: none !important; }
+      #topbar { gap: 10px; }
+    }
+    @media (max-height: 420px) {
+      :root { --bar: 38px; }
+    }
+    @media (pointer: coarse) {
+      #controls button { width: 36px; height: 36px; }
+      #controls button::after { display: none; }
+      #start { height: 40px; padding: 0 22px; }
+    }
+  </style>
+</head>
+<body>
+<div id="app">
+  <div id="frame">
+    <main id="stage">
+      <div id="screen_container" tabindex="0" aria-label="Windows display">
+        <div></div>
+        <canvas></canvas>
+      </div>
+
+      <div id="overlay">
+        <section id="intro">
+          <h1>Windows 10</h1>
+          <p class="description">Emulated entirely in this tab. Nothing is streamed.</p>
+          <button id="start" type="button"><span class="spinner" aria-hidden="true"></span><span class="label">Start Windows</span></button>
+        </section>
+      </div>
+
+      <div id="progress" role="progressbar" aria-label="Download progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div></div></div>
+    </main>
+
+    <footer id="topbar">
+      <div id="brand">glasspane</div>
+      <p id="status" role="status" aria-live="polite">Loading emulator…</p>
+      <p id="hint"><span class="free">Double-click the display to capture the mouse</span><span class="captured"><span class="kbd">Esc</span> releases the mouse</span></p>
+      <span id="stats" aria-hidden="true"></span>
+      <nav id="controls" aria-label="Virtual machine controls">
+        <button id="savestate" type="button" aria-label="Save emulator state" data-tip="Save state" disabled>
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v8M4.75 7.5 8 10.75l3.25-3.25M3 13.5h10"/></svg>
+        </button>
+        <button id="restart" type="button" aria-label="Restart the emulated machine" data-tip="Restart">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8A5.5 5.5 0 1 1 8 2.5c1.55 0 2.95.64 3.95 1.65L13.5 5.6"/><path d="M13.5 2.5v3.1h-3.1"/></svg>
+        </button>
+        <button id="mouse" type="button" aria-label="Capture mouse" aria-pressed="false" data-tip="Capture mouse">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.25 2.75 3.7 10.3 1.75-4.3 4.3-1.75z"/></svg>
+        </button>
+        <button id="fullscreen" type="button" aria-label="Fullscreen display" data-tip="Fullscreen">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 6V3.5a1 1 0 0 1 1-1H6M10 2.5h2.5a1 1 0 0 1 1 1V6M13.5 10v2.5a1 1 0 0 1-1 1H10M6 13.5H3.5a1 1 0 0 1-1-1V10"/></svg>
+        </button>
+      </nav>
+    </footer>
+  </div>
+</div>
+
+<script src="assets/v86/libv86.js"></script>
+<script>
+'use strict';
+
+const $ = id => document.getElementById(id);
+const screenContainer = $('screen_container');
+const overlay = $('overlay');
+const startButton = $('start');
+const startLabel = startButton.querySelector('.label');
+const statusEl = $('status');
+const progressTrack = $('progress');
+const progressEl = progressTrack.firstElementChild;
+const statsEl = $('stats');
+
+if(!new URLSearchParams(location.search).has('dev')) {
+  $('savestate').style.display = 'none';
+}
+
+let emulator = null;
+let bootConfig = null;
+let startedAt = 0;
+let statusTimer = 0;
+
+// `clearAfter` (ms) makes a message transient: it gives the line back to the hint.
+function setStatus(text, isError = false, clearAfter = 0) {
+  clearTimeout(statusTimer);
+  statusEl.textContent = text;
+  statusEl.classList.toggle('error', isError);
+  document.body.classList.toggle('error', isError);
+  if(text) console.log('[glasspane]', text);
+  if(clearAfter) statusTimer = setTimeout(() => setStatus(''), clearAfter);
+}
+
+function setProgress(fraction) {
+  const clamped = Math.max(0, Math.min(1, fraction));
+  progressEl.style.width = `${clamped * 100}%`;
+  progressTrack.setAttribute('aria-valuenow', String(Math.round(clamped * 100)));
+}
+
+// The page is always in one of three phases:
+//   idle    – pane is off, Start is available
+//   loading – Start was pressed, images are downloading
+//   running – the pane shows the guest display
+function setPhase(phase) {
+  const body = document.body.classList;
+  body.toggle('loading', phase === 'loading');
+  body.toggle('running', phase === 'running');
+  overlay.classList.toggle('hidden', phase === 'running');
+  // Entering "running" leaves the button as it is, so it does not change while the overlay fades out.
+  if(phase !== 'running') {
+    startButton.disabled = phase !== 'idle';
+    startLabel.textContent = phase === 'loading' ? 'Starting…' : startedAt ? 'Resume' : 'Start Windows';
+  }
+  if(phase !== 'loading') setProgress(0);
+  if(phase !== 'running') statsEl.textContent = '';
+}
+
+function megabytes(bytes) {
+  const mb = bytes / 1e6;
+  return mb >= 1000 ? `${(mb / 1000).toFixed(1)} GB` : `${Math.max(1, Math.round(mb))} MB`;
+}
+
+async function loadManifest() {
+  const params = new URLSearchParams(location.search);
+  if(params.has('iso')) return { type: 'iso' };
+
+  try {
+    const response = await fetch('images/manifest.json', { cache: 'no-store' });
+    if(response.ok) return { type: 'disk', manifest: await response.json() };
+  } catch(_) {}
+
+  return { type: 'missing' };
+}
+
+function imageConfig() {
+  if(bootConfig.type === 'iso') {
+    return {
+      cdrom: {
+        url: 'iso/windows10-ltsc-x86-eval.iso',
+        async: true,
+      },
+    };
+  }
+
+  const m = bootConfig.manifest;
+  return {
+    hda: {
+      url: m.url,
+      async: true,
+      use_parts: true,
+      fixed_chunk_size: m.fixed_chunk_size,
+      size: m.size,
+    },
+  };
+}
+
+function createEmulator() {
+  const memoryMiB = Number(new URLSearchParams(location.search).get('ram') || 1024);
+  const options = Object.assign({
+    wasm_path: 'assets/v86/v86.wasm',
+    memory_size: memoryMiB * 1024 * 1024,
+    vga_memory_size: 32 * 1024 * 1024,
+    screen_container: screenContainer,
+    bios: { url: 'assets/v86/seabios.bin' },
+    vga_bios: { url: 'assets/v86/vgabios.bin' },
+    acpi: true,
+    autostart: true,
+    disable_speaker: true,
+    network_relay_url: 'none',
+  }, imageConfig());
+
+  if(bootConfig.type === 'disk' && bootConfig.manifest.state_url) {
+    options.initial_state = { url: bootConfig.manifest.state_url };
+  }
+
+  emulator = new V86(options);
+
+  emulator.add_listener('download-progress', e => {
+    // Firmware and the wasm binary arrive in a blink; only the large image is
+    // worth a progress bar, and skipping the small files keeps it from resetting.
+    if(!e.lengthComputable || !e.total || e.total < 8 * 1024 * 1024) return;
+    if(!document.body.classList.contains('loading')) return;
+    const fraction = e.loaded / e.total;
+    setProgress(fraction);
+    statsEl.textContent = `${megabytes(e.loaded)} of ${megabytes(e.total)}`;
+  });
+
+  emulator.add_listener('emulator-ready', () => {
+    startedAt = performance.now();
+    enterRunning();
+  });
+  emulator.add_listener('emulator-started', () => {
+    $('savestate').disabled = false;
+    // Also covers resuming a stopped machine, where "ready" does not fire again.
+    if(startedAt) enterRunning();
+  });
+  emulator.add_listener('emulator-stopped', () => {
+    $('savestate').disabled = true;
+    setPhase('idle');
+    setStatus('The emulated machine is stopped.');
+  });
+  emulator.add_listener('download-error', e => {
+    setPhase('idle');
+    startButton.disabled = true;
+    const name = (e.file_name || 'an image file').split('/').pop();
+    setStatus(`Failed to load ${name}. Reload the page to try again.`, true);
+  });
+}
+
+function enterRunning() {
+  if(document.body.classList.contains('running')) return;
+  setPhase('running');
+  setStatus('');
+  updateStats();
+  screenContainer.focus();
+}
+
+async function boot() {
+  setPhase('loading');
+
+  if(!bootConfig) bootConfig = await loadManifest();
+
+  if(bootConfig.type === 'missing') {
+    setPhase('idle');
+    setStatus('No Windows disk image found. Build one locally, or open ?iso=1 to test the installer ISO.', true);
+    return;
+  }
+
+  setStatus(bootConfig.type === 'iso' ? 'Booting installer ISO…' : 'Loading Windows disk image…');
+
+  try {
+    if(!emulator) {
+      createEmulator();
+    } else if(emulator.v86) {
+      emulator.run();
+    }
+  } catch(error) {
+    console.error(error);
+    setPhase('idle');
+    setStatus('The emulator could not be started.', true);
+  }
+}
+
+$('start').addEventListener('click', boot);
+
+$('restart').addEventListener('click', () => {
+  if(emulator) emulator.restart();
+  setPhase('running');
+  screenContainer.focus();
+});
+
+$('fullscreen').addEventListener('click', async () => {
+  if(document.fullscreenElement) await document.exitFullscreen();
+  else await screenContainer.requestFullscreen();
+});
+
+$('savestate').addEventListener('click', async () => {
+  if(!emulator) return;
+  const button = $('savestate');
+  button.disabled = true;
+  setStatus('Saving emulator state…');
+  try {
+    const state = await emulator.save_state();
+    try {
+      const response = await fetch('/upload-state', { method: 'POST', body: state });
+      if(response.ok) {
+        setStatus('State saved to state/glasspane-state.bin', false, 8000);
+      } else {
+        throw new Error('upload failed');
+      }
+    } catch(_) {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([state], { type: 'application/octet-stream' }));
+      a.download = 'glasspane-state.bin';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+      setStatus('State download started. Compress it as state/glasspane-state.bin.zst.', false, 15000);
+    }
+  } catch(error) {
+    console.error(error);
+    setStatus('Could not save emulator state', true, 10000);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$('mouse').addEventListener('click', () => {
+  if(emulator) emulator.lock_mouse();
+  screenContainer.focus();
+});
+
+screenContainer.addEventListener('mousedown', () => screenContainer.focus());
+screenContainer.querySelector('canvas').addEventListener('dblclick', () => {
+  if(emulator) emulator.lock_mouse();
+});
+
+document.addEventListener('pointerlockchange', () => {
+  const captured = !!document.pointerLockElement;
+  document.body.classList.toggle('captured', captured);
+  $('mouse').setAttribute('aria-pressed', String(captured));
+});
+
+function updateStats() {
+  if(!startedAt || !document.body.classList.contains('running')) return;
+  const seconds = Math.floor((performance.now() - startedAt) / 1000);
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor(seconds / 60) % 60;
+  const s = String(seconds % 60).padStart(2, '0');
+  statsEl.textContent = h ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
+}
+setInterval(updateStats, 1000);
+
+(async function init() {
+  const config = await loadManifest();
+  if(!bootConfig) bootConfig = config;
+  // Start may have been pressed while the manifest was still loading.
+  if(startButton.disabled) return;
+  if(bootConfig.type === 'disk') {
+    const m = bootConfig.manifest;
+    const detail = m.state_compressed_bytes
+      ? `${megabytes(m.state_compressed_bytes)} download`
+      : `${Math.round(m.size / 1024 / 1024 / 1024)} GiB disk`;
+    setStatus(`${m.name || 'Windows 10 image'} · ${detail}`);
+  } else if(bootConfig.type === 'iso') {
+    setStatus('Installer ISO mode selected.');
+  } else {
+    setStatus('No generated Windows image found yet.', true);
+  }
+
+  if(new URLSearchParams(location.search).has('autostart')) boot();
+})();
+</script>
+</body>
+</html>
