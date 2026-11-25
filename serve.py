@@ -9,7 +9,10 @@ import json
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
+BIND = sys.argv[2] if len(sys.argv) > 2 else '127.0.0.1'
 UPLOAD_LOCK = threading.Lock()
+
+PRIVATE_PATH_PARTS = {'.git', 'iso', 'build', 'state', '__pycache__'}
 
 class Handler(SimpleHTTPRequestHandler):
     extensions_map = {
@@ -41,8 +44,18 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         return None
 
+    def path_is_private(self, path):
+        rel = os.path.relpath(path, ROOT)
+        if rel == os.pardir or rel.startswith(os.pardir + os.sep):
+            return True
+        parts = [part for part in rel.split(os.sep) if part not in {'', '.'}]
+        return bool(set(parts) & PRIVATE_PATH_PARTS) or any(part.startswith('.') for part in parts)
+
     def send_head(self):
         path = self.translate_path(self.path)
+        if self.path_is_private(path):
+            self.send_error(403)
+            return None
         if os.path.isdir(path) or not os.path.exists(path):
             return super().send_head()
 
@@ -86,6 +99,9 @@ class Handler(SimpleHTTPRequestHandler):
         return RangeFile(f, length)
 
     def do_POST(self):
+        if self.client_address[0] not in {'127.0.0.1', '::1'}:
+            self.send_error(403)
+            return
         if self.path != '/upload-state':
             self.send_error(404)
             return
@@ -173,5 +189,5 @@ class RangeFile:
 
 if __name__ == '__main__':
     os.chdir(ROOT)
-    print(f'Glasspane listening on http://127.0.0.1:{PORT}/')
-    ThreadingHTTPServer(('0.0.0.0', PORT), Handler).serve_forever()
+    print(f'Glasspane listening on http://{BIND}:{PORT}/')
+    ThreadingHTTPServer((BIND, PORT), Handler).serve_forever()

@@ -566,7 +566,7 @@ function createEmulator() {
     net_device: { type: 'none' },
   }, imageConfig());
 
-  if(bootConfig.type === 'disk' && bootConfig.manifest.state_url) {
+  if(bootConfig.type === 'disk' && bootConfig.manifest.state_url && !params.has('nostate') && !params.has('fresh')) {
     options.initial_state = { url: bootConfig.manifest.state_url };
   }
 

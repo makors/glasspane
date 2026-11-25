@@ -10,11 +10,11 @@ python3 serve.py 8000
 
 Open <http://127.0.0.1:8000/>.
 
-The generated Windows disk image is intentionally not committed. It is loaded lazily in compressed chunks over ordinary static HTTP, so the same directory can be deployed to any static file host that supports byte-range or normal file responses.
+The generated Windows disk image is intentionally not committed. It is loaded lazily in compressed chunks over ordinary static HTTP. Do not deploy the repository root: it can contain the Microsoft ISO, raw disks, memory states, and other private build artifacts. If experimenting with private hosting, copy only `index.html`, `assets/`, and `images/` to a separate deployment directory. Generated Windows images generally may not be publicly redistributed without appropriate Microsoft rights.
 
 ## Build the Windows image locally
 
-Requirements: Linux with KVM, QEMU, mtools, zstd, curl, 7z, and about 20 GB of free disk space.
+Requirements: Linux with KVM, Nix (with flakes/nix-command), zstd, curl, 7z, and about 20 GB of free disk space. QEMU and xorriso are supplied through Nix by the scripts.
 
 ```sh
 scripts/build-image.sh
@@ -32,14 +32,14 @@ For a fast startup, let Windows reach the desktop in the browser, open the page 
 Useful development modes:
 
 - `?iso=1` boots the installer ISO directly as a compatibility test.
-- `?ram=1024` changes guest RAM in MiB.
+- `?ram=1024` changes guest RAM in MiB when no saved-state memory size is recorded; `?nostate=1` or `?fresh=1` boots without the saved state as a recovery escape hatch.
 - `?dev=1` exposes the save-state control.
 - `?autostart=1` starts the VM immediately without waiting for the Start button.
 
 ## Notes
 
 - Windows 10 is 32-bit because v86 emulates a 32-bit x86 CPU.
-- The installer media is ordinary Windows 10 Pro consumer media rather than evaluation media. The ISO does not include a license or activation entitlement; use it only with a valid Windows license. Redistribution of a preinstalled activated Windows image is not addressed by this project.
-- Windows 10 is out of mainstream support. Treat networking as untrusted and prefer leaving network emulation disabled.
+- The installer media is ordinary Windows 10 Pro consumer media rather than evaluation media. The ISO does not include a license or activation entitlement; use it only with a valid Windows license. Neither activation nor redistribution rights for a preinstalled Windows image are granted by the installation media.
+- Windows 10 22H2 is end of support. Treat networking as untrusted and prefer leaving network emulation disabled. The generated image currently uses unattended local autologon with a well-known password, which is another reason not to enable networking or expose it beyond local experimentation.
 - Browser emulation is single-threaded and much slower than KVM. Responsiveness comes primarily from a small installation, lazy compressed disk loading, and restoring a saved state.
 - Bundled v86 build: copy/v86 commit `9457e7a` or later, which includes NX-bit support required by Windows 10.
