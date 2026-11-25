@@ -1,31 +1,29 @@
 #!/usr/bin/env python3
-"""Capture the headless QEMU VM display as a PNG (or raw PPM fallback)."""
-import os, socket, subprocess, sys
+"""Capture the headless QEMU VM display as a PNG."""
+import os, socket, sys, time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sock_path = os.path.join(ROOT, 'state', 'qemu-monitor.sock')
-ppm = os.path.join(ROOT, 'state', 'screen.ppm')
-out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, 'state', 'screen.png')
-if not out.endswith('.ppm'):
-    out_ppm = ppm
-else:
-    out_ppm = out
+out = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, 'state', 'screen.png'))
+tmp = out + '.tmp.png'
 
 try:
-    os.unlink(ppm)
+    os.unlink(tmp)
 except FileNotFoundError:
     pass
 
 s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 s.settimeout(5)
 s.connect(sock_path)
-s.sendall(f'screendump {ppm}\n'.encode())
+s.sendall(f'screendump "{tmp}" -f png\n'.encode())
 s.close()
 
-if out != out_ppm:
-    if subprocess.run(['bash','-lc','command -v magick >/dev/null']).returncode == 0:
-        subprocess.run(['magick', out_ppm, out], check=True)
-    else:
-        print(out_ppm)
-        sys.exit(0)
-print(out)
+deadline = time.time() + 5
+while time.time() < deadline:
+    if os.path.getsize(tmp) if os.path.exists(tmp) else 0:
+        os.replace(tmp, out)
+        print(out)
+        break
+    time.sleep(0.05)
+else:
+    raise SystemExit('timed out waiting for QEMU screendump')

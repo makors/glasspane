@@ -553,7 +553,7 @@ function createEmulator() {
     acpi: true,
     autostart: true,
     disable_speaker: true,
-    network_relay_url: 'none',
+    net_device: { type: 'none' },
   }, imageConfig());
 
   if(bootConfig.type === 'disk' && bootConfig.manifest.state_url) {
@@ -561,6 +561,7 @@ function createEmulator() {
   }
 
   emulator = new V86(options);
+  if(emulator.keyboard_set_enabled) emulator.keyboard_set_enabled(false);
 
   emulator.add_listener('download-progress', e => {
     // Firmware and the wasm binary arrive in a blink; only the large image is
@@ -631,14 +632,26 @@ async function boot() {
 $('start').addEventListener('click', boot);
 
 $('restart').addEventListener('click', () => {
-  if(emulator) emulator.restart();
-  setPhase('running');
-  screenContainer.focus();
+  if(!emulator || !emulator.v86) return;
+  try {
+    emulator.restart();
+    setPhase('running');
+    screenContainer.focus();
+  } catch(error) {
+    console.error(error);
+    setStatus('The emulator is not ready to restart yet.', true, 5000);
+  }
 });
 
 $('fullscreen').addEventListener('click', async () => {
-  if(document.fullscreenElement) await document.exitFullscreen();
-  else await screenContainer.requestFullscreen();
+  try {
+    if(document.fullscreenElement) await document.exitFullscreen();
+    else if(screenContainer.requestFullscreen) await screenContainer.requestFullscreen();
+    else setStatus('Fullscreen is not available in this browser.', true, 5000);
+  } catch(error) {
+    console.error(error);
+    setStatus('Fullscreen is not available in this browser.', true, 5000);
+  }
 });
 
 $('savestate').addEventListener('click', async () => {
@@ -681,10 +694,21 @@ screenContainer.querySelector('canvas').addEventListener('dblclick', () => {
   if(emulator) emulator.lock_mouse();
 });
 
+function updateKeyboardCapture() {
+  if(!emulator || !emulator.keyboard_set_enabled) return;
+  const active = document.activeElement;
+  const focused = active === screenContainer || screenContainer.contains(active);
+  emulator.keyboard_set_enabled(focused || !!document.pointerLockElement);
+}
+
+screenContainer.addEventListener('focusin', updateKeyboardCapture);
+screenContainer.addEventListener('focusout', () => setTimeout(updateKeyboardCapture, 0));
+
 document.addEventListener('pointerlockchange', () => {
   const captured = !!document.pointerLockElement;
   document.body.classList.toggle('captured', captured);
   $('mouse').setAttribute('aria-pressed', String(captured));
+  updateKeyboardCapture();
 });
 
 function updateStats() {

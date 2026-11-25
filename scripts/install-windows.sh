@@ -13,6 +13,11 @@ if [ ! -s "$ISO" ]; then
   exit 1
 fi
 
+if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+  echo "QEMU is already running (pid $(cat "$PIDFILE")); stop it before reinstalling" >&2
+  exit 1
+fi
+
 scripts/make-unattend.sh >/dev/null
 
 if [ ! -f "$DISK" ]; then
@@ -31,13 +36,14 @@ nix shell nixpkgs#qemu -c qemu-system-x86_64 \
   -m 2048 \
   -rtc base=localtime \
   -drive file="$DISK",format=raw,if=ide,index=0,media=disk \
-  -drive file="$ISO",media=cdrom,if=ide,index=2,readonly=on \
+  -drive file="$ISO",format=raw,media=cdrom,if=ide,index=2,readonly=on \
   -drive file=build/unattend.img,format=raw,if=floppy \
   -boot once=d \
   -netdev user,id=n0 -device e1000,netdev=n0 \
   -vga std \
   -display none \
   -serial file:state/serial.log \
+  -D state/qemu.log \
   -monitor unix:"$MONITOR",server,nowait \
   -pidfile "$PIDFILE" \
   -daemonize

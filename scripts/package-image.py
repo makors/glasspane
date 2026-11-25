@@ -12,7 +12,7 @@ INFILE = os.environ.get('INFILE', os.path.join(ROOT, 'build', 'win10.raw'))
 OUTDIR = os.environ.get('OUTDIR', os.path.join(ROOT, 'images', 'win10'))
 MANIFEST = os.environ.get('MANIFEST', os.path.join(ROOT, 'images', 'manifest.json'))
 CHUNK = int(os.environ.get('CHUNK_SIZE', str(1024 * 1024)))
-LEVEL = os.environ.get('ZSTD_LEVEL', '12')
+LEVEL = os.environ.get('ZSTD_LEVEL', '19')
 JOBS = int(os.environ.get('ZSTD_JOBS', str(max(2, min(8, os.cpu_count() or 2)))))
 
 def compress_one(item):

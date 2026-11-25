@@ -25,8 +25,18 @@ class Handler(SimpleHTTPRequestHandler):
 
     def end_headers(self):
         self.send_header('Accept-Ranges', 'bytes')
-        self.send_header('Cache-Control', 'public, max-age=3600')
+        if self.path.startswith('/assets/'):
+            self.send_header('Cache-Control', 'public, max-age=3600')
+        else:
+            self.send_header('Cache-Control', 'no-cache')
         super().end_headers()
+
+    def range_unsatisfiable(self, size):
+        self.send_response(416)
+        self.send_header('Content-Range', f'bytes */{size}')
+        self.send_header('Content-Length', '0')
+        self.end_headers()
+        return None
 
     def send_head(self):
         path = self.translate_path(self.path)
@@ -37,18 +47,29 @@ class Handler(SimpleHTTPRequestHandler):
         if not range_header:
             return super().send_head()
 
-        match = re.fullmatch(r'bytes=(\d+)-(\d*)', range_header.strip())
-        if not match:
-            self.send_error(416, 'Invalid Range')
-            return None
+        value = range_header.strip()
+        if ',' in value:
+            return super().send_head()
+
+        explicit = re.fullmatch(r'bytes=(\d+)-(\d*)', value)
+        suffix = re.fullmatch(r'bytes=-(\d+)', value)
+        if not explicit and not suffix:
+            return super().send_head()
 
         size = os.path.getsize(path)
-        start = int(match.group(1))
-        end = int(match.group(2)) if match.group(2) else size - 1
-        end = min(end, size - 1)
+        if suffix:
+            suffix_length = int(suffix.group(1))
+            if suffix_length == 0 or size == 0:
+                return self.range_unsatisfiable(size)
+            start = max(size - suffix_length, 0)
+            end = size - 1
+        else:
+            start = int(explicit.group(1))
+            end = int(explicit.group(2)) if explicit.group(2) else size - 1
+            end = min(end, size - 1)
+
         if start >= size or start > end:
-            self.send_error(416, 'Range Not Satisfiable')
-            return None
+            return self.range_unsatisfiable(size)
 
         length = end - start + 1
         self.send_response(206)
@@ -59,7 +80,6 @@ class Handler(SimpleHTTPRequestHandler):
 
         f = open(path, 'rb')
         f.seek(start)
-        self.range_remaining = length
         return RangeFile(f, length)
 
     def do_POST(self):
