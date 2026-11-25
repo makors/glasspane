@@ -40,6 +40,16 @@ def chunks():
             count += 1
 
 def main():
+    pidfile = os.path.join(ROOT, 'state', 'qemu.pid')
+    if os.path.exists(pidfile):
+        try:
+            pid = int(open(pidfile).read().strip())
+            os.kill(pid, 0)
+        except (ValueError, ProcessLookupError, PermissionError):
+            pass
+        else:
+            raise SystemExit('QEMU is still running; wait for the finalizer to power it off before packaging')
+
     if not os.path.exists(INFILE):
         raise SystemExit(f'missing {INFILE}; run scripts/install-windows.sh first')
     if not shutil.which('zstd'):
