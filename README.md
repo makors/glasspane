@@ -14,13 +14,13 @@ The generated Windows disk image is intentionally not committed. It is loaded la
 
 ## Build the Windows image locally
 
-Requirements: Linux with KVM, QEMU, mtools, zstd, curl, and about 20 GB of free disk space.
+Requirements: Linux with KVM, QEMU, mtools, zstd, curl, 7z, and about 20 GB of free disk space.
 
 ```sh
 scripts/build-image.sh
 ```
 
-This downloads the official 32-bit Windows 10 Enterprise LTSC 2021 Evaluation ISO from Microsoft, performs an unattended BIOS/IDE install in headless QEMU. If the postinstall script does not power the VM off automatically, wait for the desktop and shut it down cleanly with `scripts/qemu-monitor.py system_powerdown`. Then package the raw disk:
+This expects the official 32-bit Windows 10 22H2 consumer ISO (`Win10_22H2_English_x32v1.iso`) and performs an unattended BIOS/IDE install of Windows 10 Pro in headless QEMU. Microsoft’s generated ISO URLs expire after 24 hours, so `scripts/download-iso.sh` explains how to supply the current signed URL and verifies the fixed Microsoft-published SHA256. After QEMU powers off automatically, package the raw disk:
 
 ```sh
 scripts/package-image.sh
@@ -39,7 +39,7 @@ Useful development modes:
 ## Notes
 
 - Windows 10 is 32-bit because v86 emulates a 32-bit x86 CPU.
-- The Microsoft image is a time-limited evaluation. Use it in accordance with its license terms.
+- The installer media is ordinary Windows 10 Pro consumer media rather than evaluation media. The ISO does not include a license or activation entitlement; use it only with a valid Windows license. Redistribution of a preinstalled activated Windows image is not addressed by this project.
 - Windows 10 is out of mainstream support. Treat networking as untrusted and prefer leaving network emulation disabled.
 - Browser emulation is single-threaded and much slower than KVM. Responsiveness comes primarily from a small installation, lazy compressed disk loading, and restoring a saved state.
 - Bundled v86 build: copy/v86 commit `9457e7a` or later, which includes NX-bit support required by Windows 10.

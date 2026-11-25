@@ -467,6 +467,11 @@ let emulator = null;
 let bootConfig = null;
 let startedAt = 0;
 let statusTimer = 0;
+let absoluteMouse = false;
+let captureInProgress = false;
+let ideReadsInFlight = 0;
+let memorySizeBytes = 512 * 1024 * 1024;
+const ideReadWaiters = new Set();
 
 // `clearAfter` (ms) makes a message transient: it gives the line back to the hint.
 function setStatus(text, isError = false, clearAfter = 0) {
@@ -523,7 +528,7 @@ function imageConfig() {
   if(bootConfig.type === 'iso') {
     return {
       cdrom: {
-        url: 'iso/windows10-ltsc-x86-eval.iso',
+        url: 'iso/Win10_22H2_English_x32v1.iso',
         async: true,
       },
     };
@@ -542,11 +547,16 @@ function imageConfig() {
 }
 
 function createEmulator() {
-  const memoryMiB = Number(new URLSearchParams(location.search).get('ram') || 1024);
+  const params = new URLSearchParams(location.search);
+  const stateMemoryMiB = bootConfig.type === 'disk' && bootConfig.manifest.memory_size
+    ? bootConfig.manifest.memory_size / (1024 * 1024)
+    : 0;
+  const memoryMiB = stateMemoryMiB || Number(params.get('ram') || 512);
+  memorySizeBytes = memoryMiB * 1024 * 1024;
   const options = Object.assign({
     wasm_path: 'assets/v86/v86.wasm',
-    memory_size: memoryMiB * 1024 * 1024,
-    vga_memory_size: 32 * 1024 * 1024,
+    memory_size: memorySizeBytes,
+    vga_memory_size: 8 * 1024 * 1024,
     screen_container: screenContainer,
     bios: { url: 'assets/v86/seabios.bin' },
     vga_bios: { url: 'assets/v86/vgabios.bin' },
@@ -561,7 +571,70 @@ function createEmulator() {
   }
 
   emulator = new V86(options);
-  if(emulator.keyboard_set_enabled) emulator.keyboard_set_enabled(false);
+
+  // Adapters are constructed asynchronously, but this connector exists
+  // synchronously and is the same bus later given to the mouse adapter.
+  const mouseBus = emulator.bus;
+  if(mouseBus) {
+    const sendMouse = mouseBus.send.bind(mouseBus);
+    mouseBus.send = function(name, args, transfer) {
+      if(name === 'mouse-absolute') {
+        const canvas = screenContainer.querySelector('canvas');
+        if(canvas && canvas.width && canvas.height) {
+          const containerRect = screenContainer.getBoundingClientRect();
+          const canvasRect = canvas.getBoundingClientRect();
+          const clientX = args[0] + containerRect.left;
+          const clientY = args[1] + containerRect.top;
+          const aspect = canvas.width / canvas.height;
+          let width = canvasRect.width;
+          let height = canvasRect.height;
+          let left = canvasRect.left;
+          let top = canvasRect.top;
+          if(width / height > aspect) {
+            const displayWidth = height * aspect;
+            left += (width - displayWidth) / 2;
+            width = displayWidth;
+          } else if(width / height < aspect) {
+            const displayHeight = width / aspect;
+            top += (height - displayHeight) / 2;
+            height = displayHeight;
+          }
+          if(width > 0 && height > 0) {
+            const x = Math.max(left, Math.min(left + width, clientX)) - left;
+            const y = Math.max(top, Math.min(top + height, clientY)) - top;
+            args = [x, y, width, height];
+          }
+        }
+      }
+      return sendMouse(name, args, transfer);
+    };
+  }
+
+  emulator.add_listener('emulator-loaded', () => {
+    emulator.keyboard_set_enabled(false);
+    updateKeyboardCapture();
+  });
+
+  emulator.add_listener('ide-read-start', () => {
+    ideReadsInFlight++;
+  });
+  emulator.add_listener('ide-read-end', () => {
+    ideReadsInFlight = Math.max(0, ideReadsInFlight - 1);
+    if(!ideReadsInFlight) {
+      for(const resolve of ideReadWaiters) resolve();
+      ideReadWaiters.clear();
+    }
+  });
+
+  emulator.add_listener('vmware-absolute-mouse', enabled => {
+    absoluteMouse = enabled;
+    document.body.classList.toggle('absolute-mouse', enabled);
+    $('mouse').style.display = enabled ? 'none' : '';
+    $('hint').querySelector('.free').textContent = enabled
+      ? 'Move over the display to control the mouse'
+      : 'Double-click the display to capture the mouse';
+    if(enabled && document.pointerLockElement) document.exitPointerLock();
+  });
 
   emulator.add_listener('download-progress', e => {
     // Firmware and the wasm binary arrive in a blink; only the large image is
@@ -584,8 +657,13 @@ function createEmulator() {
   });
   emulator.add_listener('emulator-stopped', () => {
     $('savestate').disabled = true;
-    setPhase('idle');
-    setStatus('The emulated machine is stopped.');
+    if(document.pointerLockElement) document.exitPointerLock();
+    screenContainer.blur();
+    emulator.keyboard_set_enabled(false);
+    if(!captureInProgress) {
+      setPhase('idle');
+      setStatus('The emulated machine is stopped.');
+    }
   });
   emulator.add_listener('download-error', e => {
     setPhase('idle');
@@ -648,21 +726,45 @@ $('fullscreen').addEventListener('click', async () => {
     if(document.fullscreenElement) await document.exitFullscreen();
     else if(screenContainer.requestFullscreen) await screenContainer.requestFullscreen();
     else setStatus('Fullscreen is not available in this browser.', true, 5000);
+    screenContainer.focus();
   } catch(error) {
     console.error(error);
     setStatus('Fullscreen is not available in this browser.', true, 5000);
   }
 });
 
+function waitForIdeReads(timeoutMs = 10000) {
+  if(!ideReadsInFlight) return Promise.resolve(true);
+  return new Promise(resolve => {
+    const waiter = () => resolve(true);
+    ideReadWaiters.add(waiter);
+    setTimeout(() => {
+      ideReadWaiters.delete(waiter);
+      resolve(!ideReadsInFlight);
+    }, timeoutMs);
+  });
+}
+
 $('savestate').addEventListener('click', async () => {
   if(!emulator) return;
   const button = $('savestate');
   button.disabled = true;
+  captureInProgress = true;
+  const wasRunning = emulator.is_running ? emulator.is_running() : true;
   setStatus('Saving emulator state…');
   try {
+    if(wasRunning) await emulator.stop();
+    if(!await waitForIdeReads()) throw new Error('disk reads did not finish');
     const state = await emulator.save_state();
     try {
-      const response = await fetch('/upload-state', { method: 'POST', body: state });
+      const response = await fetch('/upload-state', {
+        method: 'POST',
+        body: state,
+        headers: {
+          'X-Glasspane-Image-Id': bootConfig.type === 'disk' ? bootConfig.manifest.image_id || '' : '',
+          'X-Glasspane-Memory-Size': String(memorySizeBytes),
+        },
+      });
       if(response.ok) {
         setStatus('State saved to state/glasspane-state.bin', false, 8000);
       } else {
@@ -680,29 +782,36 @@ $('savestate').addEventListener('click', async () => {
     console.error(error);
     setStatus('Could not save emulator state', true, 10000);
   } finally {
+    captureInProgress = false;
+    if(wasRunning) await emulator.run();
     button.disabled = false;
   }
 });
 
 $('mouse').addEventListener('click', () => {
-  if(emulator) emulator.lock_mouse();
+  if(emulator && !absoluteMouse) emulator.lock_mouse();
   screenContainer.focus();
 });
 
 screenContainer.addEventListener('mousedown', () => screenContainer.focus());
 screenContainer.querySelector('canvas').addEventListener('dblclick', () => {
-  if(emulator) emulator.lock_mouse();
+  if(emulator && !absoluteMouse) emulator.lock_mouse();
 });
 
 function updateKeyboardCapture() {
   if(!emulator || !emulator.keyboard_set_enabled) return;
   const active = document.activeElement;
   const focused = active === screenContainer || screenContainer.contains(active);
-  emulator.keyboard_set_enabled(focused || !!document.pointerLockElement);
+  const running = document.body.classList.contains('running');
+  emulator.keyboard_set_enabled(running && (focused || !!document.pointerLockElement));
 }
 
 screenContainer.addEventListener('focusin', updateKeyboardCapture);
 screenContainer.addEventListener('focusout', () => setTimeout(updateKeyboardCapture, 0));
+
+document.addEventListener('fullscreenchange', () => {
+  if(document.fullscreenElement === screenContainer) screenContainer.focus();
+});
 
 document.addEventListener('pointerlockchange', () => {
   const captured = !!document.pointerLockElement;

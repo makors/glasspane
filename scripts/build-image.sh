@@ -2,6 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 scripts/download-iso.sh
+scripts/download-vmmouse.sh
 scripts/install-windows.sh
 cat <<'MSG'
 

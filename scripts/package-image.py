@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import time
+import uuid
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INFILE = os.environ.get('INFILE', os.path.join(ROOT, 'build', 'win10.raw'))
@@ -88,26 +89,19 @@ def main():
         if n.startswith('chunk-') and n.endswith('.zst')
     )
     manifest = {
-        'name': 'Windows 10 Enterprise LTSC 2021 Evaluation (32-bit)',
+        'name': 'Windows 10 Pro 22H2 (32-bit)',
         'url': 'images/win10/chunk.zst',
         'size': size,
         'fixed_chunk_size': CHUNK,
         'chunks': expected,
         'compressed_bytes': total_compressed,
+        'image_id': uuid.uuid4().hex,
         'created': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
     }
 
-    state_raw = os.path.join(ROOT, 'state', 'glasspane-state.bin')
-    state_compressed = state_raw + '.zst'
     state_out = os.path.join(OUTDIR, 'state.bin.zst')
-    if os.path.exists(state_compressed):
-        shutil.copyfile(state_compressed, state_out)
-    elif os.path.exists(state_raw):
-        with open(state_raw, 'rb') as inp, open(state_out, 'wb') as out:
-            subprocess.run(['zstd', '-q', '-f', '-19', '-T0', '-c'], stdin=inp, stdout=out, check=True)
     if os.path.exists(state_out):
-        manifest['state_url'] = 'images/win10/state.bin.zst'
-        manifest['state_compressed_bytes'] = os.path.getsize(state_out)
+        os.unlink(state_out)
 
     os.makedirs(os.path.dirname(MANIFEST), exist_ok=True)
     with open(MANIFEST, 'w') as f:

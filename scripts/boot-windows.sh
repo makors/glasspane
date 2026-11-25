@@ -11,21 +11,20 @@ if [ -f state/qemu.pid ] && kill -0 "$(cat state/qemu.pid)" 2>/dev/null; then
   exit 1
 fi
 
-qemu-system-x86_64 \
+nix shell nixpkgs#qemu -c qemu-system-i386 \
   -machine pc,accel=kvm \
-  -cpu max \
-  -smp 4 \
-  -m 2048 \
+  -cpu coreduo \
+  -smp 1 \
+  -m 1024 \
   -rtc base=localtime \
+  -nic none \
   -drive file=build/win10.raw,format=raw,if=ide,index=0,media=disk \
-  -drive file=build/unattend.img,format=raw,if=floppy \
   -boot c \
-  -netdev user,id=n0 \
-  -device e1000,netdev=n0 \
   -vga std \
   -display none \
   -serial file:state/serial.log \
   -monitor unix:state/qemu-monitor.sock,server,nowait \
+  -qmp unix:state/qemu-qmp.sock,server,nowait \
   -pidfile state/qemu.pid \
   -daemonize
 

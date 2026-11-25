@@ -4,9 +4,12 @@ from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 import os
 import re
 import sys
+import threading
+import json
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
+UPLOAD_LOCK = threading.Lock()
 
 class Handler(SimpleHTTPRequestHandler):
     extensions_map = {
@@ -86,19 +89,59 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path != '/upload-state':
             self.send_error(404)
             return
-        length = int(self.headers.get('Content-Length', '0'))
+        try:
+            length = int(self.headers.get('Content-Length', ''))
+        except ValueError:
+            self.send_error(411)
+            return
+        if length < 16:
+            self.send_error(400)
+            return
+
         os.makedirs(os.path.join(ROOT, 'state'), exist_ok=True)
         target = os.path.join(ROOT, 'state', 'glasspane-state.bin')
-        tmp = target + '.tmp'
+        tmp = target + f'.tmp.{os.getpid()}.{threading.get_ident()}'
         remaining = length
-        with open(tmp, 'wb') as out:
-            while remaining:
-                data = self.rfile.read(min(1024 * 1024, remaining))
-                if not data:
-                    break
-                out.write(data)
-                remaining -= len(data)
-        os.replace(tmp, target)
+        try:
+            with UPLOAD_LOCK, open(tmp, 'wb') as out:
+                while remaining:
+                    data = self.rfile.read(min(1024 * 1024, remaining))
+                    if not data:
+                        break
+                    out.write(data)
+                    remaining -= len(data)
+                if remaining:
+                    raise ValueError('truncated upload')
+                out.flush()
+                os.fsync(out.fileno())
+
+            with open(tmp, 'rb') as uploaded:
+                header = uploaded.read(16)
+            magic, version, total_length, info_length = int.from_bytes(header[0:4], 'little'), int.from_bytes(header[4:8], 'little'), int.from_bytes(header[8:12], 'little'), int.from_bytes(header[12:16], 'little')
+            if magic != 0x86768676 or version != 6 or total_length != length or info_length > length - 16:
+                raise ValueError('invalid v86 state header')
+            os.replace(tmp, target)
+            image_id = self.headers.get('X-Glasspane-Image-Id', '')
+            memory_size = self.headers.get('X-Glasspane-Memory-Size', '')
+            if image_id or memory_size:
+                meta = {
+                    'image_id': image_id if all(c in '0123456789abcdef' for c in image_id.lower()) and len(image_id) <= 64 else '',
+                    'memory_size': int(memory_size) if memory_size.isdigit() else 0,
+                }
+                meta_target = target + '.meta.json'
+                meta_tmp = meta_target + f'.tmp.{os.getpid()}.{threading.get_ident()}'
+                with open(meta_tmp, 'w') as meta_file:
+                    json.dump(meta, meta_file, indent=2)
+                    meta_file.write('\n')
+                os.replace(meta_tmp, meta_target)
+        except (OSError, ValueError):
+            try:
+                os.unlink(tmp)
+            except FileNotFoundError:
+                pass
+            self.send_error(400)
+            return
+
         self.send_response(200)
         self.send_header('Content-Length', '2')
         self.end_headers()
